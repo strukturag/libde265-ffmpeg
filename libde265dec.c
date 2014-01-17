@@ -200,7 +200,7 @@ static av_cold int de265_ctx_init(AVCodecContext *avctx)
 }
 
 
-static AVCodec ff_libde265_decoder;
+AVCodec ff_libde265_decoder;
 
 void libde265dec_register()
 {
