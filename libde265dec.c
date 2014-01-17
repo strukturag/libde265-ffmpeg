@@ -200,10 +200,41 @@ static av_cold int de265_ctx_init(AVCodecContext *avctx)
 }
 
 
+static void libde265dec_unregister_codecs(enum AVCodecID id)
+{
+    AVCodec *prev = NULL;
+    AVCodec *codec = av_codec_next(NULL);
+    while (codec != NULL) {
+        AVCodec *next = av_codec_next(codec);
+        if (codec->id == id) {
+            if (prev != NULL) {
+                // remove previously registered codec with the same id
+                // NOTE: this won't work for the first registered codec
+                //       which is fine for this use case
+                prev->next = next;
+            } else {
+                prev = codec;
+            }
+        } else {
+            prev = codec;
+        }
+        codec = next;
+    }
+}
+
+
 AVCodec ff_libde265_decoder;
 
 void libde265dec_register()
 {
+    static int registered = 0;
+
+    if (registered) {
+        return;
+    }
+
+    registered = 1;
+    libde265dec_unregister_codecs(AV_CODEC_ID_H265);
     memset(&ff_libde265_decoder, 0, sizeof(AVCodec));
     ff_libde265_decoder.name           = "libde265";
     ff_libde265_decoder.type           = AVMEDIA_TYPE_VIDEO;
