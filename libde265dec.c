@@ -29,7 +29,6 @@
 extern "C" {
 #endif
 #include <libavcodec/avcodec.h>
-#include <libavcodec/internal.h>
 
 #include <libavutil/common.h>
 #include <libavutil/imgutils.h>
@@ -128,7 +127,10 @@ static int de265_decode(AVCodecContext *avctx,
             return avpkt->size;
         }
 
-        if ((ret = ff_get_buffer(avctx, picture, 0)) < 0)
+        picture->width = avctx->width;
+        picture->height = avctx->height;
+        picture->format = avctx->pix_fmt;
+        if ((ret = av_frame_get_buffer(picture, 0)) < 0)
             return ret;
 
         for (int i=0;i<4;i++) {
@@ -198,23 +200,23 @@ static av_cold int de265_ctx_init(AVCodecContext *avctx)
 }
 
 
-AVCodec ff_libde265_decoder = {
-    .name           = "libde265",
-    .type           = AVMEDIA_TYPE_VIDEO,
-    .id             = AV_CODEC_ID_H265,
-    .priv_data_size = sizeof(DE265Context),
-    .init_static_data = de265_static_init,
-    .init           = de265_ctx_init,
-    .close          = de265_free,
-    .decode         = de265_decode,
-    .flush          = de265_flush,
-    .capabilities   = CODEC_CAP_DELAY | CODEC_CAP_AUTO_THREADS | CODEC_CAP_DR1 |
-                      CODEC_CAP_SLICE_THREADS,
-    .long_name      = NULL_IF_CONFIG_SMALL("libde265 H.265/HEVC decoder"),
-};
-
+static AVCodec ff_libde265_decoder;
 
 void libde265dec_register()
 {
+    memset(&ff_libde265_decoder, 0, sizeof(AVCodec));
+    ff_libde265_decoder.name           = "libde265";
+    ff_libde265_decoder.type           = AVMEDIA_TYPE_VIDEO;
+    ff_libde265_decoder.id             = AV_CODEC_ID_H265;
+    ff_libde265_decoder.priv_data_size = sizeof(DE265Context);
+    ff_libde265_decoder.init_static_data = de265_static_init;
+    ff_libde265_decoder.init           = de265_ctx_init;
+    ff_libde265_decoder.close          = de265_free;
+    ff_libde265_decoder.decode         = de265_decode;
+    ff_libde265_decoder.flush          = de265_flush;
+    ff_libde265_decoder.capabilities   = CODEC_CAP_DELAY | CODEC_CAP_AUTO_THREADS | CODEC_CAP_DR1 |
+                                         CODEC_CAP_SLICE_THREADS;
+    ff_libde265_decoder.long_name      = NULL_IF_CONFIG_SMALL("libde265 H.265/HEVC decoder");
+
     avcodec_register(&ff_libde265_decoder);
 }
