@@ -130,7 +130,7 @@ static int de265_decode(AVCodecContext *avctx,
         picture->width = avctx->width;
         picture->height = avctx->height;
         picture->format = avctx->pix_fmt;
-        if ((ret = av_frame_get_buffer(picture, 0)) < 0)
+        if ((ret = av_frame_get_buffer(picture, 32)) < 0)
             return ret;
 
         for (int i=0;i<4;i++) {
