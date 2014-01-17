@@ -50,8 +50,8 @@ typedef struct DE265DecoderContext {
 static int de265_decode(AVCodecContext *avctx,
                         void *data, int *got_frame, AVPacket *avpkt)
 {
-    DE265Context *ctx = avctx->priv_data;
-    AVFrame *picture = data;
+    DE265Context *ctx = (DE265Context *) avctx->priv_data;
+    AVFrame *picture = (AVFrame *) data;
     const struct de265_image *img;
     de265_error err;
     int ret;
@@ -152,7 +152,7 @@ static int de265_decode(AVCodecContext *avctx,
 
 static av_cold int de265_free(AVCodecContext *avctx)
 {
-    DE265Context *ctx = avctx->priv_data;
+    DE265Context *ctx = (DE265Context *) avctx->priv_data;
     de265_free_decoder(ctx->decoder);
     return 0;
 }
@@ -160,7 +160,7 @@ static av_cold int de265_free(AVCodecContext *avctx)
 
 static av_cold void de265_flush(AVCodecContext *avctx)
 {
-    DE265Context *ctx = avctx->priv_data;
+    DE265Context *ctx = (DE265Context *) avctx->priv_data;
     ctx->pts_queue_len = 0;
 }
 
@@ -173,7 +173,7 @@ static av_cold void de265_static_init(struct AVCodec *codec)
 
 static av_cold int de265_ctx_init(AVCodecContext *avctx)
 {
-    DE265Context *ctx = avctx->priv_data;
+    DE265Context *ctx = (DE265Context *) avctx->priv_data;
     ctx->decoder = de265_new_decoder();
     if (avctx->active_thread_type & FF_THREAD_SLICE) {
         int threads = avctx->thread_count;
