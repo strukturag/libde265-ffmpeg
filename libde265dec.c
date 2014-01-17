@@ -25,12 +25,18 @@
  * H.265 decoder based on libde265
  */
 
+#ifdef __cplusplus
+extern "C" {
+#endif
 #include <libavcodec/avcodec.h>
 #include <libavcodec/internal.h>
 
 #include <libavutil/common.h>
 #include <libavutil/imgutils.h>
 #include <libavutil/intreadwrite.h>
+#ifdef __cplusplus
+}
+#endif
 
 #include <libde265/de265.h>
 
