@@ -183,7 +183,8 @@ static av_cold int de265_ctx_init(AVCodecContext *avctx)
 {
     DE265Context *ctx = (DE265Context *) avctx->priv_data;
     ctx->decoder = de265_new_decoder();
-    if (avctx->active_thread_type & FF_THREAD_SLICE) {
+    // XXX: always decode multiple threads for now
+    if (1 || avctx->active_thread_type & FF_THREAD_SLICE) {
         int threads = avctx->thread_count;
         if (threads <= 0) {
             threads = av_cpu_count();
