@@ -254,7 +254,7 @@ void libde265dec_register()
     ff_libde265_decoder.decode         = de265_decode;
     ff_libde265_decoder.flush          = de265_flush;
     ff_libde265_decoder.capabilities   = CODEC_CAP_DELAY | CODEC_CAP_AUTO_THREADS | CODEC_CAP_DR1 |
-                                         CODEC_CAP_SLICE_THREADS;
+                                         CODEC_CAP_SLICE_THREADS | CODEC_CAP_FRAME_THREADS;
     ff_libde265_decoder.long_name      = "libde265 H.265/HEVC decoder";
 
     avcodec_register(&ff_libde265_decoder);
