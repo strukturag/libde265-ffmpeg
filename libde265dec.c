@@ -60,14 +60,20 @@ static int de265_decode(AVCodecContext *avctx,
     const struct de265_image *img;
     de265_error err;
     int ret;
+    int64_t pts;
 
     const uint8_t* src[4];
     int stride[4];
 
     // insert input packet PTS into sorted queue
+    if (avpkt->pts != AV_NOPTS_VALUE) {
+        pts = avpkt->pts;
+    } else {
+        pts = avctx->reordered_opaque;
+    }
     if (ctx->pts_queue_len < DE265_MAX_PTS_QUEUE) {
         int pos=0;
-        while (ctx->pts_queue[pos] < avctx->reordered_opaque &&
+        while (ctx->pts_queue[pos] < pts &&
                pos<ctx->pts_queue_len) {
             pos++;
         }
@@ -77,7 +83,7 @@ static int de265_decode(AVCodecContext *avctx,
                 sizeof(int64_t) * (ctx->pts_queue_len - pos));
         }
 
-        ctx->pts_queue[pos] = avctx->reordered_opaque;
+        ctx->pts_queue[pos] = pts;
         ctx->pts_queue_len++;
         if (ctx->pts_queue_len > ctx->pts_min_queue_len) {
             ctx->pts_min_queue_len = ctx->pts_queue_len;
@@ -145,6 +151,7 @@ static int de265_decode(AVCodecContext *avctx,
         // assign next PTS from queue
         if (ctx->pts_queue_len > 0) {
             picture->reordered_opaque = ctx->pts_queue[0];
+            picture->pkt_pts = ctx->pts_queue[0];
 
             if (ctx->pts_queue_len>1) {
                 memmove(&ctx->pts_queue[0], &ctx->pts_queue[1],
