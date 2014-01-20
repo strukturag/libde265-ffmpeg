@@ -37,14 +37,37 @@ extern "C" {
 }
 #endif
 
+#ifdef _WIN32
+#include <windows.h>
+
+#define MUTEX_TYPE          HANDLE
+#define MUTEX_INIT(m)       *m = CreateMutex(NULL, FALSE, NULL)
+#define MUTEX_DESTROY(m)    CloseHandle(*m)
+#define MUTEX_LOCK(m)       WaitForSingleObject(*m, INFINITE)
+#define MUTEX_UNLOCK(m)     ReleaseMutex(*m)
+#else
+#include <pthread.h>
+
+#define MUTEX_TYPE          pthread_mutex_t
+#define MUTEX_INIT(m)       pthread_mutex_init(m, NULL)
+#define MUTEX_DESTROY(m)    pthread_mutex_destroy(m)
+#define MUTEX_LOCK(m)       pthread_mutex_lock(m)
+#define MUTEX_UNLOCK(m)     pthread_mutex_unlock(m)
+#endif
+
 #include <libde265/de265.h>
 
 #include "libde265dec.h"
 
 #define DE265_MAX_PTS_QUEUE 256
 
+#define LOCK(ctx)           MUTEX_LOCK(&ctx->decoder_lock)
+#define UNLOCK(ctx)         MUTEX_UNLOCK(&ctx->decoder_lock)
+
 typedef struct DE265DecoderContext {
+    struct DE265DecoderContext *parent;
     de265_decoder_context* decoder;
+    MUTEX_TYPE decoder_lock;
 
     int64_t pts_queue[DE265_MAX_PTS_QUEUE];
     int pts_queue_len;
@@ -55,7 +78,8 @@ typedef struct DE265DecoderContext {
 static int de265_decode(AVCodecContext *avctx,
                         void *data, int *got_frame, AVPacket *avpkt)
 {
-    DE265Context *ctx = (DE265Context *) avctx->priv_data;
+    DE265Context *_ctx = (DE265Context *) avctx->priv_data;
+    DE265Context *ctx = (DE265Context *) _ctx->parent;
     AVFrame *picture = (AVFrame *) data;
     const struct de265_image *img;
     de265_error err;
@@ -65,12 +89,23 @@ static int de265_decode(AVCodecContext *avctx,
     const uint8_t* src[4];
     int stride[4];
 
+    // replace 4-byte length fields with NAL start codes
+    uint8_t* avpkt_data = avpkt->data;
+    uint8_t* avpkt_end = avpkt->data + avpkt->size;
+    while (avpkt_data + 4 <= avpkt_end) {
+        int nal_size = AV_RB32(avpkt_data);
+        AV_WB32(avpkt_data, 0x00000001);
+        avpkt_data += 4 + nal_size;
+    }
+
     // insert input packet PTS into sorted queue
     if (avpkt->pts != AV_NOPTS_VALUE) {
         pts = avpkt->pts;
     } else {
         pts = avctx->reordered_opaque;
     }
+
+    LOCK(ctx);
     if (ctx->pts_queue_len < DE265_MAX_PTS_QUEUE) {
         int pos=0;
         while (ctx->pts_queue[pos] < pts &&
@@ -90,18 +125,10 @@ static int de265_decode(AVCodecContext *avctx,
         }
     }
 
-    // replace 4-byte length fields with NAL start codes
-    uint8_t* avpkt_data = avpkt->data;
-    uint8_t* avpkt_end = avpkt->data + avpkt->size;
-    while (avpkt_data + 4 <= avpkt_end) {
-        int nal_size = AV_RB32(avpkt_data);
-        AV_WB32(avpkt_data, 0x00000001);
-        avpkt_data += 4 + nal_size;
-    }
-
     err = de265_decode_data(ctx->decoder, avpkt->data, avpkt->size);
     if (err != DE265_OK) {
         const char *error  = de265_get_error_text(err);
+        UNLOCK(ctx);
 
         av_log(avctx, AV_LOG_ERROR, "Failed to decode frame: %s\n", error);
         return AVERROR_INVALIDDATA;
@@ -113,6 +140,7 @@ static int de265_decode(AVCodecContext *avctx,
         if (de265_get_chroma_format(img) != de265_chroma_420) {
             av_log(avctx, AV_LOG_ERROR, "Unsupported output colorspace (%d)\n",
                    de265_get_chroma_format(img));
+            UNLOCK(ctx);
             return AVERROR_INVALIDDATA;
         }
 
@@ -123,21 +151,26 @@ static int de265_decode(AVCodecContext *avctx,
                 av_log(avctx, AV_LOG_INFO, "dimension change! %dx%d -> %dx%d\n",
                        avctx->width, avctx->height, width, height);
 
-            if (av_image_check_size(width, height, 0, avctx))
+            if (av_image_check_size(width, height, 0, avctx)) {
+                UNLOCK(ctx);
                 return AVERROR_INVALIDDATA;
+            }
 
             avcodec_set_dimensions(avctx, width, height);
         }
         if (ctx->pts_queue_len < ctx->pts_min_queue_len) {
             // fill pts queue to ensure reordering works
+            UNLOCK(ctx);
             return avpkt->size;
         }
 
         picture->width = avctx->width;
         picture->height = avctx->height;
         picture->format = avctx->pix_fmt;
-        if ((ret = av_frame_get_buffer(picture, 32)) < 0)
+        if ((ret = av_frame_get_buffer(picture, 32)) < 0) {
+            UNLOCK(ctx);
             return ret;
+        }
 
         for (int i=0;i<4;i++) {
             src[i] = de265_get_image_plane(img,i, &stride[i]);
@@ -161,6 +194,7 @@ static int de265_decode(AVCodecContext *avctx,
             ctx->pts_queue_len--;
         }
     }
+    UNLOCK(ctx);
     return avpkt->size;
 }
 
@@ -168,7 +202,10 @@ static int de265_decode(AVCodecContext *avctx,
 static av_cold int de265_free(AVCodecContext *avctx)
 {
     DE265Context *ctx = (DE265Context *) avctx->priv_data;
+    LOCK(ctx);
     de265_free_decoder(ctx->decoder);
+    UNLOCK(ctx);
+    MUTEX_DESTROY(&ctx->decoder_lock);
     return 0;
 }
 
@@ -176,7 +213,9 @@ static av_cold int de265_free(AVCodecContext *avctx)
 static av_cold void de265_flush(AVCodecContext *avctx)
 {
     DE265Context *ctx = (DE265Context *) avctx->priv_data;
-    ctx->pts_queue_len = 0;
+    LOCK(ctx);
+    ctx->parent->pts_queue_len = 0;
+    UNLOCK(ctx);
 }
 
 
@@ -204,9 +243,10 @@ static av_cold int de265_ctx_init(AVCodecContext *avctx)
     ctx->pts_min_queue_len = 0;
 
     avctx->pix_fmt = AV_PIX_FMT_YUV420P;
+    MUTEX_INIT(&ctx->decoder_lock);
+    ctx->parent = (struct DE265DecoderContext *) ctx;
     return 0;
 }
-
 
 static void libde265dec_unregister_codecs(enum AVCodecID id)
 {
