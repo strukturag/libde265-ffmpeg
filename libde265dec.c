@@ -257,6 +257,14 @@ static av_cold int ff_libde265dec_ctx_init(AVCodecContext *avctx)
             threads = av_cpu_count();
         }
         if (threads > 0) {
+            // XXX: We start more threads than cores for now, as some threads
+            // might get blocked while waiting for dependent data. Having more
+            // threads increases decoding speed by about 10%
+            threads *= 2;
+            if (threads > 32) {
+                // TODO: this limit should come from the libde265 headers
+                threads = 32;
+            }
             de265_start_worker_threads(ctx->decoder, threads);
         }
     }
