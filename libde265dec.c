@@ -41,16 +41,24 @@ extern "C" {
 
 #include "libde265dec.h"
 
+#ifndef LIBDE265_NUMERIC_VERSION
+// older versions of libde265 don't provide the define
+#define LIBDE265_NUMERIC_VERSION 0x00040000
+#endif
+
+#if LIBDE265_NUMERIC_VERSION < 0x00050000
 #define DE265_MAX_PTS_QUEUE 256
+#endif
 
 typedef struct DE265DecoderContext {
     de265_decoder_context* decoder;
 
+#if LIBDE265_NUMERIC_VERSION < 0x00050000
     int64_t pts_queue[DE265_MAX_PTS_QUEUE];
     int pts_queue_len;
     int pts_min_queue_len;
+#endif
 } DE265Context;
-
 
 static int de265_decode(AVCodecContext *avctx,
                         void *data, int *got_frame, AVPacket *avpkt)
@@ -61,26 +69,45 @@ static int de265_decode(AVCodecContext *avctx,
     de265_error err;
     int ret;
     int64_t pts;
+#if LIBDE265_NUMERIC_VERSION >= 0x00050000
+    int more = 0;
+#endif
 
     const uint8_t* src[4];
     int stride[4];
 
-    // replace 4-byte length fields with NAL start codes
-    uint8_t* avpkt_data = avpkt->data;
-    uint8_t* avpkt_end = avpkt->data + avpkt->size;
-    while (avpkt_data + 4 <= avpkt_end) {
-        int nal_size = AV_RB32(avpkt_data);
-        AV_WB32(avpkt_data, 0x00000001);
-        avpkt_data += 4 + nal_size;
-    }
+    if (avpkt->size > 0) {
+        if (avpkt->pts != AV_NOPTS_VALUE) {
+            pts = avpkt->pts;
+        } else {
+            pts = avctx->reordered_opaque;
+        }
 
-    // insert input packet PTS into sorted queue
-    if (avpkt->pts != AV_NOPTS_VALUE) {
-        pts = avpkt->pts;
+        // replace 4-byte length fields with NAL start codes
+        uint8_t* avpkt_data = avpkt->data;
+        uint8_t* avpkt_end = avpkt->data + avpkt->size;
+        while (avpkt_data + 4 <= avpkt_end) {
+            int nal_size = AV_RB32(avpkt_data);
+#if LIBDE265_NUMERIC_VERSION < 0x00050000
+            AV_WB32(avpkt_data, 0x00000001);
+#else
+            err = de265_push_NAL(ctx->decoder, avpkt_data + 4, nal_size, pts, NULL);
+            if (err != DE265_OK) {
+                const char *error = de265_get_error_text(err);
+                av_log(avctx, AV_LOG_ERROR, "Failed to push data: %s\n", error);
+                return AVERROR_INVALIDDATA;
+            }
+#endif
+            avpkt_data += 4 + nal_size;
+        }
+#if LIBDE265_NUMERIC_VERSION >= 0x00050000
     } else {
-        pts = avctx->reordered_opaque;
+        de265_flush_data(ctx->decoder);
+#endif
     }
 
+#if LIBDE265_NUMERIC_VERSION < 0x00050000
+    // insert input packet PTS into sorted queue
     if (ctx->pts_queue_len < DE265_MAX_PTS_QUEUE) {
         int pos=0;
         while (ctx->pts_queue[pos] < pts &&
@@ -101,11 +128,28 @@ static int de265_decode(AVCodecContext *avctx,
     }
 
     err = de265_decode_data(ctx->decoder, avpkt->data, avpkt->size);
-    if (err != DE265_OK) {
-        const char *error  = de265_get_error_text(err);
+#else
+    // decode as much as possible
+    do {
+        err = de265_decode(ctx->decoder, &more);
+    } while (more && err == DE265_OK);
+#endif
 
-        av_log(avctx, AV_LOG_ERROR, "Failed to decode frame: %s\n", error);
-        return AVERROR_INVALIDDATA;
+    switch (err) {
+    case DE265_OK:
+    case DE265_ERROR_IMAGE_BUFFER_FULL:
+#if LIBDE265_NUMERIC_VERSION >= 0x00050000
+    case DE265_ERROR_WAITING_FOR_INPUT_DATA:
+#endif
+        break;
+
+    default:
+        {
+            const char *error  = de265_get_error_text(err);
+
+            av_log(avctx, AV_LOG_ERROR, "Failed to decode frame: %s\n", error);
+            return AVERROR_INVALIDDATA;
+        }
     }
 
     if ((img = de265_get_next_picture(ctx->decoder)) != NULL) {
@@ -130,10 +174,12 @@ static int de265_decode(AVCodecContext *avctx,
 
             avcodec_set_dimensions(avctx, width, height);
         }
+#if LIBDE265_NUMERIC_VERSION < 0x00050000
         if (ctx->pts_queue_len < ctx->pts_min_queue_len) {
             // fill pts queue to ensure reordering works
             return avpkt->size;
         }
+#endif
 
         picture->width = avctx->width;
         picture->height = avctx->height;
@@ -151,6 +197,7 @@ static int de265_decode(AVCodecContext *avctx,
 
         *got_frame = 1;
 
+#if LIBDE265_NUMERIC_VERSION < 0x00050000
         // assign next PTS from queue
         if (ctx->pts_queue_len > 0) {
             picture->reordered_opaque = ctx->pts_queue[0];
@@ -163,6 +210,10 @@ static int de265_decode(AVCodecContext *avctx,
 
             ctx->pts_queue_len--;
         }
+#else
+        picture->reordered_opaque = de265_get_image_PTS(img);
+        picture->pkt_pts = de265_get_image_PTS(img);
+#endif
     }
     return avpkt->size;
 }
@@ -179,13 +230,19 @@ static av_cold int de265_free(AVCodecContext *avctx)
 static av_cold void de265_flush(AVCodecContext *avctx)
 {
     DE265Context *ctx = (DE265Context *) avctx->priv_data;
+#if LIBDE265_NUMERIC_VERSION < 0x00050000
     ctx->pts_queue_len = 0;
+#else
+    de265_reset(ctx->decoder);
+#endif
 }
 
 
 static av_cold void de265_static_init(struct AVCodec *codec)
 {
+#if LIBDE265_NUMERIC_VERSION < 0x00050000
     de265_init();
+#endif
 }
 
 
@@ -203,8 +260,10 @@ static av_cold int de265_ctx_init(AVCodecContext *avctx)
             de265_start_worker_threads(ctx->decoder, threads);
         }
     }
+#if LIBDE265_NUMERIC_VERSION < 0x00050000
     ctx->pts_queue_len = 0;
     ctx->pts_min_queue_len = 0;
+#endif
 
     avctx->pix_fmt = AV_PIX_FMT_YUV420P;
     return 0;
