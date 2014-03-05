@@ -60,8 +60,8 @@ typedef struct DE265DecoderContext {
 #endif
 } DE265Context;
 
-static int de265_decode(AVCodecContext *avctx,
-                        void *data, int *got_frame, AVPacket *avpkt)
+static int ff_libde265dec_decode(AVCodecContext *avctx,
+                                 void *data, int *got_frame, AVPacket *avpkt)
 {
     DE265Context *ctx = (DE265Context *) avctx->priv_data;
     AVFrame *picture = (AVFrame *) data;
@@ -219,7 +219,7 @@ static int de265_decode(AVCodecContext *avctx,
 }
 
 
-static av_cold int de265_free(AVCodecContext *avctx)
+static av_cold int ff_libde265dec_free(AVCodecContext *avctx)
 {
     DE265Context *ctx = (DE265Context *) avctx->priv_data;
     de265_free_decoder(ctx->decoder);
@@ -227,7 +227,7 @@ static av_cold int de265_free(AVCodecContext *avctx)
 }
 
 
-static av_cold void de265_flush(AVCodecContext *avctx)
+static av_cold void ff_libde265dec_flush(AVCodecContext *avctx)
 {
     DE265Context *ctx = (DE265Context *) avctx->priv_data;
 #if LIBDE265_NUMERIC_VERSION < 0x00050000
@@ -238,7 +238,7 @@ static av_cold void de265_flush(AVCodecContext *avctx)
 }
 
 
-static av_cold void de265_static_init(struct AVCodec *codec)
+static av_cold void ff_libde265dec_static_init(struct AVCodec *codec)
 {
 #if LIBDE265_NUMERIC_VERSION < 0x00050000
     de265_init();
@@ -246,7 +246,7 @@ static av_cold void de265_static_init(struct AVCodec *codec)
 }
 
 
-static av_cold int de265_ctx_init(AVCodecContext *avctx)
+static av_cold int ff_libde265dec_ctx_init(AVCodecContext *avctx)
 {
     DE265Context *ctx = (DE265Context *) avctx->priv_data;
     ctx->decoder = de265_new_decoder();
@@ -269,7 +269,7 @@ static av_cold int de265_ctx_init(AVCodecContext *avctx)
     return 0;
 }
 
-static void libde265dec_unregister_codecs(enum AVCodecID id)
+static void ff_libde265dec_unregister_codecs(enum AVCodecID id)
 {
     AVCodec *prev = NULL;
     AVCodec *codec = av_codec_next(NULL);
@@ -303,17 +303,17 @@ void libde265dec_register()
     }
 
     registered = 1;
-    libde265dec_unregister_codecs(AV_CODEC_ID_H265);
+    ff_libde265dec_unregister_codecs(AV_CODEC_ID_H265);
     memset(&ff_libde265_decoder, 0, sizeof(AVCodec));
     ff_libde265_decoder.name           = "libde265";
     ff_libde265_decoder.type           = AVMEDIA_TYPE_VIDEO;
     ff_libde265_decoder.id             = AV_CODEC_ID_H265;
     ff_libde265_decoder.priv_data_size = sizeof(DE265Context);
-    ff_libde265_decoder.init_static_data = de265_static_init;
-    ff_libde265_decoder.init           = de265_ctx_init;
-    ff_libde265_decoder.close          = de265_free;
-    ff_libde265_decoder.decode         = de265_decode;
-    ff_libde265_decoder.flush          = de265_flush;
+    ff_libde265_decoder.init_static_data = ff_libde265dec_static_init;
+    ff_libde265_decoder.init           = ff_libde265dec_ctx_init;
+    ff_libde265_decoder.close          = ff_libde265dec_free;
+    ff_libde265_decoder.decode         = ff_libde265dec_decode;
+    ff_libde265_decoder.flush          = ff_libde265dec_flush;
     ff_libde265_decoder.capabilities   = CODEC_CAP_DELAY | CODEC_CAP_AUTO_THREADS | CODEC_CAP_DR1 |
                                          CODEC_CAP_SLICE_THREADS;
     ff_libde265_decoder.long_name      = "libde265 H.265/HEVC decoder";
