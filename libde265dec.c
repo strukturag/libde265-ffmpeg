@@ -309,7 +309,7 @@ static void ff_libde265dec_unregister_codecs(enum AVCodecID id)
 
 AVCodec ff_libde265_decoder;
 
-void libde265dec_register()
+void libde265dec_register(void)
 {
     static int registered = 0;
 
