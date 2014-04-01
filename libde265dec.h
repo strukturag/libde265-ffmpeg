@@ -36,7 +36,7 @@ extern "C" {
 
 extern AVCodec ff_libde265_decoder;
 
-void libde265dec_register();
+void libde265dec_register(void);
 
 #ifdef __cplusplus
 }
