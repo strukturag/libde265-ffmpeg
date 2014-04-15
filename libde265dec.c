@@ -232,16 +232,16 @@ static av_cold void ff_libde265dec_flush(AVCodecContext *avctx)
     DE265Context *ctx = (DE265Context *) avctx->priv_data;
 #if LIBDE265_NUMERIC_VERSION < 0x00050000
     ctx->pts_queue_len = 0;
+#elif LIBDE265_NUMERIC_VERSION >= 0x00060000
+    de265_reset(ctx->decoder);
 #else
-    // TODO: this should really use "de265_reset" (which currently
-    // invalidates the context state for multithreaded usage)
-#endif
     // flush any pending decoded images
     const struct de265_image *img;
 
     do {
         img = de265_get_next_picture(ctx->decoder);
     } while (img != NULL);
+#endif
 }
 
 
