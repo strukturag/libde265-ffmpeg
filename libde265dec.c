@@ -47,6 +47,10 @@ extern "C" {
 
 typedef struct DE265DecoderContext {
     de265_decoder_context* decoder;
+
+    int check_extra;
+    int packetized;
+    int length_size;
 } DE265Context;
 
 static int ff_libde265dec_decode(AVCodecContext *avctx,
@@ -63,6 +67,51 @@ static int ff_libde265dec_decode(AVCodecContext *avctx,
     const uint8_t* src[4];
     int stride[4];
 
+    if (ctx->check_extra) {
+        int extradata_size = avctx->extradata_size;
+        ctx->check_extra = 0;
+        if (extradata_size > 0) {
+            unsigned char *extradata = (unsigned char *) avctx->extradata;
+            if (extradata_size > 3 && extradata != NULL && (extradata[0] || extradata[1] || extradata[2] > 1)) {
+                ctx->packetized = 1;
+                if (extradata_size > 21) {
+                    ctx->length_size = (extradata[21] & 3) + 1;
+                }
+                av_log(avctx, AV_LOG_DEBUG, "Assuming packetized data (%d bytes length)\n", ctx->length_size);
+            } else {
+                ctx->packetized = 0;
+                av_log(avctx, AV_LOG_DEBUG, "Assuming non-packetized data\n");
+                err = de265_push_data(ctx->decoder, extradata, extradata_size, 0, NULL);
+                if (!de265_isOK(err)) {
+                    av_log(avctx, AV_LOG_ERROR, "Failed to push extra data: %s (%d)\n", de265_get_error_text(err), err);
+                    return AVERROR_INVALIDDATA;
+                }
+            }
+#if LIBDE265_NUMERIC_VERSION >= 0x00070000
+            de265_push_end_of_NAL(ctx->decoder);
+#endif
+            do {
+                err = de265_decode(ctx->decoder, &more);
+                switch (err) {
+                case DE265_OK:
+                    break;
+
+                case DE265_ERROR_IMAGE_BUFFER_FULL:
+                case DE265_ERROR_WAITING_FOR_INPUT_DATA:
+                    // not really an error
+                    more = 0;
+                    break;
+
+                default:
+                    if (!de265_isOK(err)) {
+                        av_log(avctx, AV_LOG_ERROR, "Failed to decode extra data: %s (%d)\n", de265_get_error_text(err), err);
+                        return AVERROR_INVALIDDATA;
+                    }
+                }
+            } while (more);
+        }
+    }
+
     if (avpkt->size > 0) {
         if (avpkt->pts != AV_NOPTS_VALUE) {
             pts = avpkt->pts;
@@ -70,18 +119,30 @@ static int ff_libde265dec_decode(AVCodecContext *avctx,
             pts = avctx->reordered_opaque;
         }
 
-        // replace 4-byte length fields with NAL start codes
-        uint8_t* avpkt_data = avpkt->data;
-        uint8_t* avpkt_end = avpkt->data + avpkt->size;
-        while (avpkt_data + 4 <= avpkt_end) {
-            int nal_size = AV_RB32(avpkt_data);
-            err = de265_push_NAL(ctx->decoder, avpkt_data + 4, nal_size, pts, NULL);
+        if (ctx->packetized) {
+            uint8_t* avpkt_data = avpkt->data;
+            uint8_t* avpkt_end = avpkt->data + avpkt->size;
+            while (avpkt_data + ctx->length_size <= avpkt_end) {
+                int nal_size = 0;
+                int i;
+                for (i=0; i<ctx->length_size; i++) {
+                    nal_size = (nal_size << 8) | avpkt_data[i];
+                }
+                err = de265_push_NAL(ctx->decoder, avpkt_data + ctx->length_size, nal_size, pts, NULL);
+                if (err != DE265_OK) {
+                    const char *error = de265_get_error_text(err);
+                    av_log(avctx, AV_LOG_ERROR, "Failed to push data: %s\n", error);
+                    return AVERROR_INVALIDDATA;
+                }
+                avpkt_data += ctx->length_size + nal_size;
+            }
+        } else {
+            err = de265_push_data(ctx->decoder, avpkt->data, avpkt->size, pts, NULL);
             if (err != DE265_OK) {
                 const char *error = de265_get_error_text(err);
                 av_log(avctx, AV_LOG_ERROR, "Failed to push data: %s\n", error);
                 return AVERROR_INVALIDDATA;
             }
-            avpkt_data += 4 + nal_size;
         }
     } else {
         de265_flush_data(ctx->decoder);
@@ -196,6 +257,9 @@ static av_cold int ff_libde265dec_ctx_init(AVCodecContext *avctx)
             de265_start_worker_threads(ctx->decoder, threads);
         }
     }
+    ctx->check_extra = 1;
+    ctx->packetized = 1;
+    ctx->length_size = 4;
 
     avctx->pix_fmt = AV_PIX_FMT_YUV420P;
     return 0;
