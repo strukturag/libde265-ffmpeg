@@ -45,13 +45,102 @@ extern "C" {
 
 #include "libde265dec.h"
 
+#define MAX_FRAME_QUEUE     16
+
 typedef struct DE265DecoderContext {
     de265_decoder_context* decoder;
 
     int check_extra;
     int packetized;
     int length_size;
+#if LIBDE265_NUMERIC_VERSION >= 0x00070000
+    int frame_queue_len;
+    AVFrame *frame_queue[MAX_FRAME_QUEUE];
+#endif
 } DE265Context;
+
+
+#if LIBDE265_NUMERIC_VERSION >= 0x00070000
+static int ff_libde265dec_get_buffer(de265_decoder_context* ctx, struct de265_image_spec* spec, struct de265_image* img, void* userdata)
+{
+    AVCodecContext *avctx = (AVCodecContext *) userdata;
+    DE265Context *dectx = (DE265Context *) avctx->priv_data;
+    if (spec->format != de265_image_format_YUV420P8) {
+        goto fallback;
+    }
+
+    AVFrame *frame = NULL;
+    if (dectx->frame_queue_len > 0) {
+        frame = dectx->frame_queue[0];
+        dectx->frame_queue_len--;
+        if (dectx->frame_queue_len > 0) {
+            memmove(dectx->frame_queue, dectx->frame_queue[1], dectx->frame_queue_len * sizeof(AVFrame *));
+        }
+        if (frame->width != spec->width || frame->height != spec->height) {
+            av_frame_free(&frame);
+        } else {
+            av_frame_make_writable(frame);
+        }
+    }
+
+    if (frame == NULL) {
+        frame = av_frame_alloc();
+        if (frame == NULL) {
+            goto fallback;
+        }
+
+        frame->width = spec->width;
+        frame->height = spec->height;
+        frame->format = AV_PIX_FMT_YUV420P;
+        if (av_frame_get_buffer(frame, spec->alignment) != 0) {
+            av_frame_free(&frame);
+            goto fallback;
+        }
+    }
+
+    if (spec->width != spec->visible_width || spec->height != spec->visible_height) {
+        // we might need to crop later
+        struct de265_image_spec *spec_copy = malloc(sizeof(struct de265_image_spec));
+        if (spec_copy == NULL) {
+            av_frame_free(&frame);
+            goto fallback;
+        }
+
+        memcpy(spec_copy, spec, sizeof(struct de265_image_spec));
+        frame->opaque = spec_copy;
+    }
+
+    for (int i=0; i<3; i++) {
+        uint8_t *data = frame->data[i];
+        int stride = frame->linesize[i];
+        de265_set_image_plane(img, i, data, stride, frame);
+    }
+    return 1;
+
+fallback:
+    return de265_get_default_image_allocation_functions()->get_buffer(ctx, spec, img, userdata);
+}
+
+
+static void ff_libde265dec_release_buffer(de265_decoder_context* ctx, struct de265_image* img, void* userdata)
+{
+    AVCodecContext *avctx = (AVCodecContext *) userdata;
+    DE265Context *dectx = (DE265Context *) avctx->priv_data;
+    AVFrame *frame = de265_get_image_plane_user_data(img, 0);
+    if (frame == NULL) {
+        de265_get_default_image_allocation_functions()->release_buffer(ctx, img, userdata);
+        return;
+    }
+
+    if (dectx->frame_queue_len == MAX_FRAME_QUEUE) {
+        av_frame_free(&frame);
+        return;
+    }
+
+    dectx->frame_queue[dectx->frame_queue_len++] = frame;
+}
+#endif
+
 
 static int ff_libde265dec_decode(AVCodecContext *avctx,
                                  void *data, int *got_frame, AVPacket *avpkt)
@@ -191,19 +280,40 @@ static int ff_libde265dec_decode(AVCodecContext *avctx,
             avcodec_set_dimensions(avctx, width, height);
         }
 
-        picture->width = avctx->width;
-        picture->height = avctx->height;
-        picture->format = avctx->pix_fmt;
-        if ((ret = av_frame_get_buffer(picture, 32)) < 0) {
-            return ret;
-        }
+#if LIBDE265_NUMERIC_VERSION >= 0x00070000
+        AVFrame *frame = de265_get_image_plane_user_data(img, 0);
+        if (frame != NULL) {
+            av_frame_ref(picture, frame);
+            if (frame->opaque) {
+                struct de265_image_spec *spec = (struct de265_image_spec *) frame->opaque;
+                frame->opaque = NULL;
+                picture->width = spec->visible_width;
+                picture->height = spec->visible_height;
+                for (int i=0; i<3; i++) {
+                    int shift = (i == 0) ? 0 : 1;
+                    int offset = (spec->crop_left >> shift) + (spec->crop_top >> shift) * picture->linesize[i];
+                    picture->data[i] += offset;
+                }
+                free(spec);
+            }
+        } else {
+#endif
+            picture->width = avctx->width;
+            picture->height = avctx->height;
+            picture->format = avctx->pix_fmt;
+            if ((ret = av_frame_get_buffer(picture, 32)) < 0) {
+                return ret;
+            }
 
-        for (int i=0;i<4;i++) {
-            src[i] = de265_get_image_plane(img,i, &stride[i]);
-        }
+            for (int i=0;i<4;i++) {
+                src[i] = de265_get_image_plane(img,i, &stride[i]);
+            }
 
-        av_image_copy(picture->data, picture->linesize, src, stride,
-                      avctx->pix_fmt, width, height);
+            av_image_copy(picture->data, picture->linesize, src, stride,
+                          avctx->pix_fmt, width, height);
+#if LIBDE265_NUMERIC_VERSION >= 0x00070000
+        }
+#endif
 
         *got_frame = 1;
 
@@ -218,6 +328,12 @@ static av_cold int ff_libde265dec_free(AVCodecContext *avctx)
 {
     DE265Context *ctx = (DE265Context *) avctx->priv_data;
     de265_free_decoder(ctx->decoder);
+#if LIBDE265_NUMERIC_VERSION >= 0x00070000
+    while (ctx->frame_queue_len) {
+        AVFrame *frame = ctx->frame_queue[--ctx->frame_queue_len];
+        av_frame_free(&frame);
+    }
+#endif
     return 0;
 }
 
@@ -257,9 +373,18 @@ static av_cold int ff_libde265dec_ctx_init(AVCodecContext *avctx)
             de265_start_worker_threads(ctx->decoder, threads);
         }
     }
+#if LIBDE265_NUMERIC_VERSION >= 0x00070000
+    struct de265_image_allocation allocation;
+    allocation.get_buffer = ff_libde265dec_get_buffer;
+    allocation.release_buffer = ff_libde265dec_release_buffer;
+    de265_set_image_allocation_functions(ctx->decoder, &allocation, avctx);
+#endif
     ctx->check_extra = 1;
     ctx->packetized = 1;
     ctx->length_size = 4;
+#if LIBDE265_NUMERIC_VERSION >= 0x00070000
+    ctx->frame_queue_len = 0;
+#endif
 
     avctx->pix_fmt = AV_PIX_FMT_YUV420P;
     return 0;
