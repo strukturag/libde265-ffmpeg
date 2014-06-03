@@ -2,6 +2,7 @@
  * H.265 decoder
  *
  * Copyright (c) 2013, Dirk Farin <dirk.farin@gmail.com>
+ * Copyright (c) 2013-2014, Joachim Bauch <bauch@struktur.de>
  *
  * This file is part of FFmpeg.
  *
