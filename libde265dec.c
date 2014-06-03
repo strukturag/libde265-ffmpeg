@@ -55,6 +55,8 @@ typedef struct DE265DecoderContext {
     int packetized;
     int length_size;
 #if LIBDE265_NUMERIC_VERSION >= 0x00070000
+    int deblocking;
+    int decode_ratio;
     int frame_queue_len;
     AVFrame *frame_queue[MAX_FRAME_QUEUE];
 #endif
@@ -238,6 +240,21 @@ static int ff_libde265dec_decode(AVCodecContext *avctx,
         de265_flush_data(ctx->decoder);
     }
 
+#if LIBDE265_NUMERIC_VERSION >= 0x00070000
+    // TODO: libde265 should support more fine-grained settings
+    int deblocking = (avctx->skip_loop_filter < AVDISCARD_NONREF);
+    if (deblocking != ctx->deblocking) {
+        ctx->deblocking = deblocking;
+        de265_set_parameter_bool(ctx->decoder, DE265_DECODER_PARAM_DISABLE_DEBLOCKING, deblocking);
+    }
+    int decode_ratio = (avctx->skip_frame >= AVDISCARD_NONREF) ? 100 : 0;
+    if (decode_ratio != ctx->decode_ratio) {
+        ctx->decode_ratio = decode_ratio;
+        de265_set_framerate_ratio(ctx->decoder, decode_ratio);
+    }
+    // TODO: how to notify to disable SAO?
+#endif
+
     // decode as much as possible
     do {
         err = de265_decode(ctx->decoder, &more);
@@ -384,6 +401,8 @@ static av_cold int ff_libde265dec_ctx_init(AVCodecContext *avctx)
     ctx->packetized = 1;
     ctx->length_size = 4;
 #if LIBDE265_NUMERIC_VERSION >= 0x00070000
+    ctx->deblocking = 1;
+    ctx->decode_ratio = 100;
     ctx->frame_queue_len = 0;
 #endif
 
