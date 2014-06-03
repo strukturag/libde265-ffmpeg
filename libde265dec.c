@@ -77,7 +77,7 @@ static int ff_libde265dec_get_buffer(de265_decoder_context* ctx, struct de265_im
         frame = dectx->frame_queue[0];
         dectx->frame_queue_len--;
         if (dectx->frame_queue_len > 0) {
-            memmove(dectx->frame_queue, dectx->frame_queue[1], dectx->frame_queue_len * sizeof(AVFrame *));
+            memmove(dectx->frame_queue, &dectx->frame_queue[1], dectx->frame_queue_len * sizeof(AVFrame *));
         }
         if (frame->width != spec->width || frame->height != spec->height) {
             av_frame_free(&frame);
