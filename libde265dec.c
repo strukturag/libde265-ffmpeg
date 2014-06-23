@@ -247,7 +247,7 @@ static int ff_libde265dec_decode(AVCodecContext *avctx,
         ctx->deblocking = deblocking;
         de265_set_parameter_bool(ctx->decoder, DE265_DECODER_PARAM_DISABLE_DEBLOCKING, deblocking);
     }
-    int decode_ratio = (avctx->skip_frame >= AVDISCARD_NONREF) ? 100 : 0;
+    int decode_ratio = (avctx->skip_frame < AVDISCARD_NONREF) ? 100 : 0;
     if (decode_ratio != ctx->decode_ratio) {
         ctx->decode_ratio = decode_ratio;
         de265_set_framerate_ratio(ctx->decoder, decode_ratio);
