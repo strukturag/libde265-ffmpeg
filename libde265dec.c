@@ -246,13 +246,14 @@ static int ff_libde265dec_decode(AVCodecContext *avctx,
     if (deblocking != ctx->deblocking) {
         ctx->deblocking = deblocking;
         de265_set_parameter_bool(ctx->decoder, DE265_DECODER_PARAM_DISABLE_DEBLOCKING, deblocking);
+        // TODO: how to notify to disable SAO?
+        de265_set_parameter_bool(ctx->decoder, DE265_DECODER_PARAM_DISABLE_SAO, deblocking);
     }
     int decode_ratio = (avctx->skip_frame < AVDISCARD_NONREF) ? 100 : 0;
     if (decode_ratio != ctx->decode_ratio) {
         ctx->decode_ratio = decode_ratio;
         de265_set_framerate_ratio(ctx->decoder, decode_ratio);
     }
-    // TODO: how to notify to disable SAO?
 #endif
 
     // decode as much as possible
