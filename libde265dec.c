@@ -166,8 +166,39 @@ static int ff_libde265dec_decode(AVCodecContext *avctx,
             unsigned char *extradata = (unsigned char *) avctx->extradata;
             if (extradata_size > 3 && extradata != NULL && (extradata[0] || extradata[1] || extradata[2] > 1)) {
                 ctx->packetized = 1;
-                if (extradata_size > 21) {
+                if (extradata_size > 22) {
+                    if (extradata[0] != 0) {
+                        av_log(avctx, AV_LOG_WARNING, "Unsupported extra data version %d, decoding may fail\n", extradata[0]);
+                    }
                     ctx->length_size = (extradata[21] & 3) + 1;
+                    int num_param_sets = extradata[22];
+                    int pos = 23;
+                    for (int i=0; i<num_param_sets; i++) {
+                        if (pos + 3 > extradata_size) {
+                            av_log(avctx, AV_LOG_ERROR, "Buffer underrun in extra header (%d >= %d)\n", pos + 3, extradata_size);
+                            return AVERROR_INVALIDDATA;
+                        }
+                        // ignore flags + NAL type (1 byte)
+                        int nal_count  = extradata[pos+1] << 8 | extradata[pos+2];
+                        pos += 3;
+                        for (int j=0; j<nal_count; j++) {
+                            if (pos + 2 > extradata_size) {
+                                av_log(avctx, AV_LOG_ERROR, "Buffer underrun in extra nal header (%d >= %d)\n", pos + 2, extradata_size);
+                                return AVERROR_INVALIDDATA;
+                            }
+                            int nal_size = extradata[pos] << 8 | extradata[pos+1];
+                            if (pos + 2 + nal_size > extradata_size) {
+                                av_log(avctx, AV_LOG_ERROR, "Buffer underrun in extra nal (%d >= %d)\n", pos + 2 + nal_size, extradata_size);
+                                return AVERROR_INVALIDDATA;
+                            }
+                            err = de265_push_NAL(ctx->decoder, extradata + pos + 2, nal_size, 0, NULL);
+                            if (!de265_isOK(err)) {
+                                av_log(avctx, AV_LOG_ERROR, "Failed to push data: %s (%d)\n", de265_get_error_text(err), err);
+                                return AVERROR_INVALIDDATA;
+                            }
+                            pos += 2 + nal_size;
+                        }
+                    }
                 }
                 av_log(avctx, AV_LOG_DEBUG, "Assuming packetized data (%d bytes length)\n", ctx->length_size);
             } else {
