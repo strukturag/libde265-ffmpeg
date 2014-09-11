@@ -476,11 +476,11 @@ void libde265dec_register(void)
     }
 
     registered = 1;
-    ff_libde265dec_unregister_codecs(AV_CODEC_ID_H265);
+    ff_libde265dec_unregister_codecs(AV_CODEC_ID_HEVC);
     memset(&ff_libde265_decoder, 0, sizeof(AVCodec));
     ff_libde265_decoder.name           = "libde265";
     ff_libde265_decoder.type           = AVMEDIA_TYPE_VIDEO;
-    ff_libde265_decoder.id             = AV_CODEC_ID_H265;
+    ff_libde265_decoder.id             = AV_CODEC_ID_HEVC;
     ff_libde265_decoder.priv_data_size = sizeof(DE265Context);
     ff_libde265_decoder.init_static_data = ff_libde265dec_static_init;
     ff_libde265_decoder.init           = ff_libde265dec_ctx_init;
