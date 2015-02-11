@@ -28,4 +28,4 @@ a couple of other packages must be installed in order to compile the
 codec:
 - libde265-dev (>= 0.6)
 
-Copyright (c) 2014 struktur AG
+Copyright (c) 2014-2015 struktur AG
