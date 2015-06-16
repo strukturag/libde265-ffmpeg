@@ -345,9 +345,16 @@ static int ff_libde265dec_decode(AVCodecContext *avctx,
     }
 #endif
 
-    // decode as much as possible
+    // decode as much as possible up to next image
     do {
+        more = 0;
         err = de265_decode(ctx->decoder, &more);
+        if (err != DE265_OK) {
+            break;
+        }
+        if (de265_peek_next_picture(ctx->decoder) != NULL) {
+            break;
+        }
     } while (more && err == DE265_OK);
 
     switch (err) {
