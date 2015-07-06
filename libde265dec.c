@@ -44,10 +44,18 @@ extern "C" {
 #error "You need libde265 0.6 or newer to compile this plugin."
 #endif
 
+#if LIBDE265_NUMERIC_VERSION < 0x01000000
+// libde265 < 1.0 only supported 8 bits per pixel
+#define de265_get_bits_per_pixel(image, plane) 8
+#endif
+
 #include "libde265dec.h"
 
 #define MAX_FRAME_QUEUE     16
 #define MAX_SPEC_QUEUE      16
+
+#define LIBDE265_FFMPEG_MAX(a, b)  ((a) > (b) ? (a) : (b))
+#define LIBDE265_FFMPEG_MIN(a, b)  ((a) < (b) ? (a) : (b))
 
 typedef struct DE265DecoderContext {
     de265_decoder_context* decoder;
@@ -71,12 +79,150 @@ static inline int align_value(int value, int alignment) {
     return ((value + (alignment - 1)) & ~(alignment - 1));
 }
 
-static inline enum AVPixelFormat get_pixel_format(enum de265_image_format format) {
+static inline enum de265_chroma get_image_chroma(enum de265_image_format format) {
     switch (format) {
+    case de265_image_format_mono8:
+        return de265_chroma_mono;
     case de265_image_format_YUV420P8:
-        return AV_PIX_FMT_YUV420P;
+        return de265_chroma_420;
+    case de265_image_format_YUV422P8:
+        return de265_chroma_422;
+    case de265_image_format_YUV444P8:
+        return de265_chroma_444;
     default:
-        return AV_PIX_FMT_NONE;
+        return -1;
+    }
+}
+
+static inline enum AVPixelFormat get_pixel_format(AVCodecContext *avctx, enum de265_chroma chroma, int bits_per_pixel) {
+    enum AVPixelFormat result = AV_PIX_FMT_NONE;
+    switch (chroma) {
+    case de265_chroma_mono:
+        result = AV_PIX_FMT_GRAY8;
+        break;
+    case de265_chroma_420:
+        switch (bits_per_pixel) {
+        case 8:
+            result = AV_PIX_FMT_YUV420P;
+            break;
+        case 9:
+            result = AV_PIX_FMT_YUV420P9LE;
+            break;
+        case 10:
+            result = AV_PIX_FMT_YUV420P10LE;
+            break;
+        case 12:
+            result = AV_PIX_FMT_YUV420P12LE;
+            break;
+        case 14:
+            result = AV_PIX_FMT_YUV420P14LE;
+            break;
+        case 16:
+            result = AV_PIX_FMT_YUV420P16LE;
+            break;
+        default:
+            if (bits_per_pixel < 8 || bits_per_pixel > 16) {
+                av_log(avctx, AV_LOG_WARNING, "Unsupported chroma %d with %d bits per pixel", chroma, bits_per_pixel);
+            } else {
+                result = AV_PIX_FMT_YUV420P16LE;
+            }
+            break;
+        }
+        break;
+    case de265_chroma_422:
+        switch (bits_per_pixel) {
+        case 8:
+            result = AV_PIX_FMT_YUV422P;
+            break;
+        case 9:
+            result = AV_PIX_FMT_YUV422P9LE;
+            break;
+        case 10:
+            result = AV_PIX_FMT_YUV422P10LE;
+            break;
+        case 12:
+            result = AV_PIX_FMT_YUV422P12LE;
+            break;
+        case 14:
+            result = AV_PIX_FMT_YUV422P14LE;
+            break;
+        case 16:
+            result = AV_PIX_FMT_YUV422P16LE;
+            break;
+        default:
+            if (bits_per_pixel < 8 || bits_per_pixel > 16) {
+                av_log(avctx, AV_LOG_WARNING, "Unsupported chroma %d with %d bits per pixel", chroma, bits_per_pixel);
+            } else {
+                result = AV_PIX_FMT_YUV422P16LE;
+            }
+            break;
+        }
+        break;
+    case de265_chroma_444:
+        switch (bits_per_pixel) {
+        case 8:
+            result = AV_PIX_FMT_YUV444P;
+            break;
+        case 9:
+            result = AV_PIX_FMT_YUV444P9LE;
+            break;
+        case 10:
+            result = AV_PIX_FMT_YUV444P10LE;
+            break;
+        case 12:
+            result = AV_PIX_FMT_YUV444P12LE;
+            break;
+        case 14:
+            result = AV_PIX_FMT_YUV444P14LE;
+            break;
+        case 16:
+            result = AV_PIX_FMT_YUV444P16LE;
+            break;
+        default:
+            if (bits_per_pixel < 8 || bits_per_pixel > 16) {
+                av_log(avctx, AV_LOG_WARNING, "Unsupported chroma %d with %d bits per pixel", chroma, bits_per_pixel);
+            } else {
+                result = AV_PIX_FMT_YUV444P16LE;
+            }
+            break;
+        }
+        break;
+    default:
+        av_log(avctx, AV_LOG_WARNING, "Unsupported chroma %d with %d bits per pixel", chroma, bits_per_pixel);
+    }
+    return result;
+}
+
+static inline int get_output_bits_per_pixel(enum AVPixelFormat format) {
+    switch (format) {
+    case AV_PIX_FMT_GRAY8:
+        return 8;
+    case AV_PIX_FMT_YUV420P:
+    case AV_PIX_FMT_YUV422P:
+    case AV_PIX_FMT_YUV444P:
+        return 8;
+    case AV_PIX_FMT_YUV420P9LE:
+    case AV_PIX_FMT_YUV422P9LE:
+    case AV_PIX_FMT_YUV444P9LE:
+        return 9;
+    case AV_PIX_FMT_YUV420P10LE:
+    case AV_PIX_FMT_YUV422P10LE:
+    case AV_PIX_FMT_YUV444P10LE:
+        return 10;
+    case AV_PIX_FMT_YUV420P12LE:
+    case AV_PIX_FMT_YUV422P12LE:
+    case AV_PIX_FMT_YUV444P12LE:
+        return 12;
+    case AV_PIX_FMT_YUV420P14LE:
+    case AV_PIX_FMT_YUV422P14LE:
+    case AV_PIX_FMT_YUV444P14LE:
+        return 14;
+    case AV_PIX_FMT_YUV420P16LE:
+    case AV_PIX_FMT_YUV422P16LE:
+    case AV_PIX_FMT_YUV444P16LE:
+        return 16;
+    default:
+        return -1;
     }
 }
 
@@ -92,8 +238,23 @@ static int ff_libde265dec_get_buffer(de265_decoder_context* ctx, struct de265_im
 {
     AVCodecContext *avctx = (AVCodecContext *) userdata;
     DE265Context *dectx = (DE265Context *) avctx->priv_data;
-    enum AVPixelFormat format = get_pixel_format(spec->format);
+
+    enum de265_chroma chroma = get_image_chroma(spec->format);
+    if (chroma != de265_chroma_mono) {
+        if (de265_get_bits_per_pixel(img, 0) != de265_get_bits_per_pixel(img, 1) ||
+            de265_get_bits_per_pixel(img, 0) != de265_get_bits_per_pixel(img, 2) ||
+            de265_get_bits_per_pixel(img, 1) != de265_get_bits_per_pixel(img, 2)) {
+            goto fallback;
+        }
+    }
+
+    int bits_per_pixel = de265_get_bits_per_pixel(img, 0);
+    enum AVPixelFormat format = get_pixel_format(avctx, chroma, bits_per_pixel);
     if (format == AV_PIX_FMT_NONE) {
+        goto fallback;
+    }
+
+    if (get_output_bits_per_pixel(format) != bits_per_pixel) {
         goto fallback;
     }
 
@@ -109,6 +270,7 @@ static int ff_libde265dec_get_buffer(de265_decoder_context* ctx, struct de265_im
         frame->format = format;
         avctx->coded_width = align_value(spec->width, spec->alignment);
         avctx->coded_height = spec->height;
+        avctx->pix_fmt = format;
         if (avctx->get_buffer2(avctx, frame, 0) < 0) {
             av_frame_free(&frame);
             goto fallback;
@@ -120,7 +282,7 @@ static int ff_libde265dec_get_buffer(de265_decoder_context* ctx, struct de265_im
             if (dectx->frame_queue_len > 0) {
                 memmove(dectx->frame_queue, &dectx->frame_queue[1], dectx->frame_queue_len * sizeof(AVFrame *));
             }
-            if (frame->width != spec->width || frame->height != spec->height) {
+            if (frame->width != spec->width || frame->height != spec->height || frame->format != format) {
                 av_frame_free(&frame);
             } else {
                 av_frame_make_writable(frame);
@@ -160,8 +322,15 @@ static int ff_libde265dec_get_buffer(de265_decoder_context* ctx, struct de265_im
         frame->opaque = spec_copy;
     }
 
-    for (int i=0; i<3; i++) {
+    int numplanes = (chroma == de265_chroma_mono ? 1 : 3);
+    for (int i=0; i<numplanes; i++) {
         uint8_t *data = frame->data[i];
+        if ((uintptr_t)data % spec->alignment) {
+            printf("Alignment mismatch: %p\n", data);
+            av_frame_free(&frame);
+            goto fallback;
+        }
+
         int stride = frame->linesize[i];
         de265_set_image_plane(img, i, data, stride, frame);
     }
@@ -375,12 +544,20 @@ static int ff_libde265dec_decode(AVCodecContext *avctx,
     if ((img = de265_get_next_picture(ctx->decoder)) != NULL) {
         int width;
         int height;
-        if (de265_get_chroma_format(img) != de265_chroma_420) {
-            av_log(avctx, AV_LOG_ERROR, "Unsupported output colorspace (%d)\n",
-                   de265_get_chroma_format(img));
+        int bits_per_pixel = LIBDE265_FFMPEG_MAX(
+                                 LIBDE265_FFMPEG_MAX(
+                                     de265_get_bits_per_pixel(img, 0),
+                                     de265_get_bits_per_pixel(img, 1)
+                                 ),
+                                 de265_get_bits_per_pixel(img, 2));
+        enum de265_chroma chroma = de265_get_chroma_format(img);
+        enum AVPixelFormat format = get_pixel_format(avctx, chroma, bits_per_pixel);
+        if (format == AV_PIX_FMT_NONE) {
             return AVERROR_INVALIDDATA;
         }
 
+        int numplanes = (chroma == de265_chroma_mono ? 1 : 3);
+        avctx->pix_fmt = format;
         width  = de265_get_image_width(img,0);
         height = de265_get_image_height(img,0);
         if (width != avctx->width || height != avctx->height) {
@@ -405,7 +582,7 @@ static int ff_libde265dec_decode(AVCodecContext *avctx,
                 frame->opaque = NULL;
                 picture->width = spec->visible_width;
                 picture->height = spec->visible_height;
-                for (int i=0; i<3; i++) {
+                for (int i=0; i<numplanes; i++) {
                     int shift = (i == 0) ? 0 : 1;
                     int offset = (spec->crop_left >> shift) + (spec->crop_top >> shift) * picture->linesize[i];
                     picture->data[i] += offset;
@@ -426,14 +603,86 @@ static int ff_libde265dec_decode(AVCodecContext *avctx,
                 return ret;
             }
 
-            for (int i=0;i<3;i++) {
-                src[i] = de265_get_image_plane(img, i, &stride[i]);
+            for (int i=0;i<=3;i++) {
+                if (i<numplanes) {
+                    src[i] = de265_get_image_plane(img, i, &stride[i]);
+                } else {
+                    src[i] = NULL;
+                    stride[i] = 0;
+                }
             }
-            src[3] = NULL;
-            stride[3] = 0;
 
-            av_image_copy(picture->data, picture->linesize, src, stride,
-                          avctx->pix_fmt, width, height);
+            int equal_strides = 1;
+            for (int i=1; i<numplanes; i++) {
+                if (stride[i-1] != stride[i]) {
+                    equal_strides = 0;
+                    break;
+                }
+            }
+            if (equal_strides) {
+                // All input planes match the output planes, copy directly.
+                av_image_copy(picture->data, picture->linesize, src, stride,
+                              avctx->pix_fmt, width, height);
+            } else {
+                int max_bits_per_pixel = get_output_bits_per_pixel(format);
+                for (int i=0; i<numplanes; i++) {
+                    int plane_width = de265_get_image_width(img, i);
+                    int plane_height = de265_get_image_height(img, i);
+                    int plane_bits_per_pixel = de265_get_bits_per_pixel(img, i);
+                    int size = LIBDE265_FFMPEG_MIN(stride[i], picture->linesize[i]);
+                    uint8_t* src_ptr = (uint8_t*) src[i];
+                    uint8_t* dst_ptr = (uint8_t*) picture->data[i];
+                    if (plane_bits_per_pixel > max_bits_per_pixel) {
+                        // More bits per pixel in this plane than supported by the output format
+                        int shift = (plane_bits_per_pixel - max_bits_per_pixel);
+                        for( int line = 0; line < plane_height; line++ ) {
+                            uint16_t *s = (uint16_t *) src_ptr;
+                            uint16_t *d = (uint16_t *) dst_ptr;
+                            for (int pos=0; pos<size/2; pos++) {
+                                *d = *s >> shift;
+                                d++;
+                                s++;
+                            }
+                            src_ptr += stride[i];
+                            dst_ptr += picture->linesize[i];
+                        }
+                    } else if (plane_bits_per_pixel < max_bits_per_pixel && plane_bits_per_pixel > 8) {
+                        // Less bits per pixel in this plane than the rest of the picture
+                        // but more than 8bpp.
+                        int shift = (max_bits_per_pixel - plane_bits_per_pixel);
+                        for( int line = 0; line < plane_height; line++ ) {
+                            uint16_t *s = (uint16_t *) src_ptr;
+                            uint16_t *d = (uint16_t *) dst_ptr;
+                            for (int pos=0; pos<size/2; pos++) {
+                                *d = *s << shift;
+                                d++;
+                                s++;
+                            }
+                            src_ptr += stride[i];
+                            dst_ptr += picture->linesize[i];
+                        }
+                    } else if (plane_bits_per_pixel < max_bits_per_pixel && plane_bits_per_pixel == 8) {
+                        // 8 bits per pixel in this plane, which is less than the rest of the picture.
+                        int shift = (max_bits_per_pixel - plane_bits_per_pixel);
+                        for( int line = 0; line < plane_height; line++ ) {
+                            uint8_t *s = (uint8_t *) src_ptr;
+                            uint16_t *d = (uint16_t *) dst_ptr;
+                            for (int pos=0; pos<size; pos++) {
+                                *d = *s << shift;
+                                d++;
+                                s++;
+                            }
+                            src_ptr += stride[i];
+                            dst_ptr += picture->linesize[i];
+                        }
+                    } else {
+                        // Bits per pixel of plane match output format.
+                        av_image_copy_plane(picture->data[i], picture->linesize[i],
+                                            src[i], stride[i], size, plane_height);
+
+                    }
+                }
+            }
 #if LIBDE265_NUMERIC_VERSION >= 0x00070000
         }
 #endif
@@ -515,8 +764,6 @@ static av_cold int ff_libde265dec_ctx_init(AVCodecContext *avctx)
     ctx->frame_queue_len = 0;
     ctx->spec_queue_len = 0;
 #endif
-
-    avctx->pix_fmt = AV_PIX_FMT_YUV420P;
     return 0;
 }
 
