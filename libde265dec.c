@@ -326,7 +326,6 @@ static int ff_libde265dec_get_buffer(de265_decoder_context* ctx, struct de265_im
     for (int i=0; i<numplanes; i++) {
         uint8_t *data = frame->data[i];
         if ((uintptr_t)data % spec->alignment) {
-            printf("Alignment mismatch: %p\n", data);
             av_frame_free(&frame);
             goto fallback;
         }
