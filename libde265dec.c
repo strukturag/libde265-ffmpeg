@@ -90,7 +90,7 @@ static inline enum de265_chroma get_image_chroma(enum de265_image_format format)
     case de265_image_format_YUV444P8:
         return de265_chroma_444;
     default:
-        return -1;
+        return (enum de265_chroma) -1;
     }
 }
 
@@ -311,7 +311,7 @@ static int ff_libde265dec_get_buffer(de265_decoder_context* ctx, struct de265_im
         if (dectx->spec_queue_len > 0) {
             spec_copy = dectx->spec_queue[--dectx->spec_queue_len];
         } else {
-            spec_copy = malloc(sizeof(struct de265_image_spec));
+            spec_copy = (de265_image_spec *) malloc(sizeof(struct de265_image_spec));
             if (spec_copy == NULL) {
                 av_frame_free(&frame);
                 goto fallback;
@@ -344,7 +344,7 @@ static void ff_libde265dec_release_buffer(de265_decoder_context* ctx, struct de2
 {
     AVCodecContext *avctx = (AVCodecContext *) userdata;
     DE265Context *dectx = (DE265Context *) avctx->priv_data;
-    AVFrame *frame = de265_get_image_plane_user_data(img, 0);
+    AVFrame *frame = (AVFrame *) de265_get_image_plane_user_data(img, 0);
     if (frame == NULL) {
         de265_get_default_image_allocation_functions()->release_buffer(ctx, img, userdata);
         return;
@@ -572,7 +572,7 @@ static int ff_libde265dec_decode(AVCodecContext *avctx,
         }
 
 #if LIBDE265_NUMERIC_VERSION >= 0x00070000
-        AVFrame *frame = de265_get_image_plane_user_data(img, 0);
+        AVFrame *frame = (AVFrame *) de265_get_image_plane_user_data(img, 0);
         if (frame != NULL) {
             av_frame_ref(picture, frame);
             if (frame->opaque) {
