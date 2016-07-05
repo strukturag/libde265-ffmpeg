@@ -79,20 +79,6 @@ static inline int align_value(int value, int alignment) {
     return ((value + (alignment - 1)) & ~(alignment - 1));
 }
 
-static inline enum de265_chroma get_image_chroma(enum de265_image_format format) {
-    switch (format) {
-    case de265_image_format_mono8:
-        return de265_chroma_mono;
-    case de265_image_format_YUV420P8:
-        return de265_chroma_420;
-    case de265_image_format_YUV422P8:
-        return de265_chroma_422;
-    case de265_image_format_YUV444P8:
-        return de265_chroma_444;
-    default:
-        return (enum de265_chroma) -1;
-    }
-}
 
 static inline enum AVPixelFormat get_pixel_format(AVCodecContext *avctx, enum de265_chroma chroma, int bits_per_pixel) {
     enum AVPixelFormat result = AV_PIX_FMT_NONE;
@@ -234,21 +220,22 @@ static void free_spec(DE265Context *ctx, struct de265_image_spec* spec) {
     }
 }
 
-static int ff_libde265dec_get_buffer(de265_decoder_context* ctx, struct de265_image_spec* spec, struct de265_image* img, void* userdata)
+static int ff_libde265dec_get_buffer(struct de265_image_intern* img,
+                                     const struct de265_image_spec* spec,
+                                     void* userdata)
 {
     AVCodecContext *avctx = (AVCodecContext *) userdata;
     DE265Context *dectx = (DE265Context *) avctx->priv_data;
 
-    enum de265_chroma chroma = get_image_chroma(spec->format);
+    enum de265_chroma chroma = spec->chroma;
     if (chroma != de265_chroma_mono) {
-        if (de265_get_bits_per_pixel(img, 0) != de265_get_bits_per_pixel(img, 1) ||
-            de265_get_bits_per_pixel(img, 0) != de265_get_bits_per_pixel(img, 2) ||
-            de265_get_bits_per_pixel(img, 1) != de265_get_bits_per_pixel(img, 2)) {
+        if (spec->luma_bytes_per_pixel != spec->chroma_bytes_per_pixel) {
             goto fallback;
         }
     }
 
-    int bits_per_pixel = de265_get_bits_per_pixel(img, 0);
+    int bytes_per_pixel = spec->luma_bytes_per_pixel;
+    int bits_per_pixel = bytes_per_pixel * 8;
     enum AVPixelFormat format = get_pixel_format(avctx, chroma, bits_per_pixel);
     if (format == AV_PIX_FMT_NONE) {
         goto fallback;
@@ -311,7 +298,7 @@ static int ff_libde265dec_get_buffer(de265_decoder_context* ctx, struct de265_im
         if (dectx->spec_queue_len > 0) {
             spec_copy = dectx->spec_queue[--dectx->spec_queue_len];
         } else {
-            spec_copy = (de265_image_spec *) malloc(sizeof(struct de265_image_spec));
+            spec_copy = (struct de265_image_spec *) malloc(sizeof(struct de265_image_spec));
             if (spec_copy == NULL) {
                 av_frame_free(&frame);
                 goto fallback;
@@ -331,22 +318,22 @@ static int ff_libde265dec_get_buffer(de265_decoder_context* ctx, struct de265_im
         }
 
         int stride = frame->linesize[i];
-        de265_set_image_plane(img, i, data, stride, frame);
+        de265_set_image_plane_intern(img, i, data, stride, frame);
     }
     return 1;
 
 fallback:
-    return de265_get_default_image_allocation_functions()->get_buffer(ctx, spec, img, userdata);
+    return de265_get_default_image_allocation_functions()->get_buffer(img, spec, userdata);
 }
 
 
-static void ff_libde265dec_release_buffer(de265_decoder_context* ctx, struct de265_image* img, void* userdata)
+static void ff_libde265dec_release_buffer(struct de265_image_intern* img, void* userdata)
 {
     AVCodecContext *avctx = (AVCodecContext *) userdata;
     DE265Context *dectx = (DE265Context *) avctx->priv_data;
-    AVFrame *frame = (AVFrame *) de265_get_image_plane_user_data(img, 0);
+    AVFrame *frame = (AVFrame *) de265_get_image_plane_user_data_intern(img, 0);
     if (frame == NULL) {
-        de265_get_default_image_allocation_functions()->release_buffer(ctx, img, userdata);
+        de265_get_default_image_allocation_functions()->release_buffer(img, userdata);
         return;
     }
 
@@ -439,25 +426,6 @@ static int ff_libde265dec_decode(AVCodecContext *avctx,
 #if LIBDE265_NUMERIC_VERSION >= 0x00070000
             de265_push_end_of_NAL(ctx->decoder);
 #endif
-            do {
-                err = de265_decode(ctx->decoder, &more);
-                switch (err) {
-                case DE265_OK:
-                    break;
-
-                case DE265_ERROR_IMAGE_BUFFER_FULL:
-                case DE265_ERROR_WAITING_FOR_INPUT_DATA:
-                    // not really an error
-                    more = 0;
-                    break;
-
-                default:
-                    if (!de265_isOK(err)) {
-                        av_log(avctx, AV_LOG_ERROR, "Failed to decode extra data: %s (%d)\n", de265_get_error_text(err), err);
-                        return AVERROR_INVALIDDATA;
-                    }
-                }
-            } while (more);
         }
     }
 
@@ -513,32 +481,10 @@ static int ff_libde265dec_decode(AVCodecContext *avctx,
     }
 #endif
 
-    // decode as much as possible up to next image
-    do {
-        more = 0;
-        err = de265_decode(ctx->decoder, &more);
-        if (err != DE265_OK) {
-            break;
-        }
-        if (de265_peek_next_picture(ctx->decoder) != NULL) {
-            break;
-        }
-    } while (more && err == DE265_OK);
+    // block until we get an image, or until we need more input data
 
-    switch (err) {
-    case DE265_OK:
-    case DE265_ERROR_IMAGE_BUFFER_FULL:
-    case DE265_ERROR_WAITING_FOR_INPUT_DATA:
-        break;
+    int action = de265_get_action(ctx->decoder, 1);
 
-    default:
-        {
-            const char *error  = de265_get_error_text(err);
-
-            av_log(avctx, AV_LOG_ERROR, "Failed to decode frame: %s\n", error);
-            return AVERROR_INVALIDDATA;
-        }
-    }
 
     if ((img = de265_get_next_picture(ctx->decoder)) != NULL) {
         int width;
@@ -570,6 +516,7 @@ static int ff_libde265dec_decode(AVCodecContext *avctx,
 
             avcodec_set_dimensions(avctx, width, height);
         }
+
 
 #if LIBDE265_NUMERIC_VERSION >= 0x00070000
         AVFrame *frame = (AVFrame *) de265_get_image_plane_user_data(img, 0);
@@ -690,6 +637,8 @@ static int ff_libde265dec_decode(AVCodecContext *avctx,
 
         picture->reordered_opaque = de265_get_image_PTS(img);
         picture->pkt_pts = de265_get_image_PTS(img);
+
+        de265_release_picture(img);
     }
     return avpkt->size;
 }
@@ -730,29 +679,13 @@ static av_cold int ff_libde265dec_ctx_init(AVCodecContext *avctx)
 {
     DE265Context *ctx = (DE265Context *) avctx->priv_data;
     ctx->decoder = de265_new_decoder();
-    // XXX: always decode multiple threads for now
-    if (1 || avctx->active_thread_type & FF_THREAD_SLICE) {
-        int threads = avctx->thread_count;
-        if (threads <= 0) {
-            threads = av_cpu_count();
-        }
-        if (threads > 0) {
-            // XXX: We start more threads than cores for now, as some threads
-            // might get blocked while waiting for dependent data. Having more
-            // threads increases decoding speed by about 10%
-            threads *= 2;
-            if (threads > 32) {
-                // TODO: this limit should come from the libde265 headers
-                threads = 32;
-            }
-            de265_start_worker_threads(ctx->decoder, threads);
-        }
-    }
+
 #if LIBDE265_NUMERIC_VERSION >= 0x00070000
     struct de265_image_allocation allocation;
     allocation.get_buffer = ff_libde265dec_get_buffer;
     allocation.release_buffer = ff_libde265dec_release_buffer;
-    de265_set_image_allocation_functions(ctx->decoder, &allocation, avctx);
+    allocation.userdata = avctx;
+    de265_set_image_allocation_functions(ctx->decoder, &allocation);
 #endif
     ctx->check_extra = 1;
     ctx->packetized = 1;
@@ -763,6 +696,23 @@ static av_cold int ff_libde265dec_ctx_init(AVCodecContext *avctx)
     ctx->frame_queue_len = 0;
     ctx->spec_queue_len = 0;
 #endif
+
+    int nFramesParallel = av_cpu_count() / 2; // TODO: how should we set this optimally ?
+    if (nFramesParallel<=1) { nFramesParallel=2; }
+
+    int nThreads = nFramesParallel * 5;
+
+    /*
+    if (1 || avctx->active_thread_type & FF_THREAD_SLICE) {
+        int threads = avctx->thread_count;
+        if (threads <= 0) {
+            threads = av_cpu_count();
+        }
+    */
+
+    de265_set_max_decode_frames_parallel(ctx->decoder, nFramesParallel);
+    de265_start_worker_threads(ctx->decoder, nThreads);
+
     return 0;
 }
 
