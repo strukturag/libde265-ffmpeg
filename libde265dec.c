@@ -699,6 +699,7 @@ static av_cold int ff_libde265dec_ctx_init(AVCodecContext *avctx)
 
     int nFramesParallel = av_cpu_count() / 2; // TODO: how should we set this optimally ?
     if (nFramesParallel<=1) { nFramesParallel=2; }
+    if (nFramesParallel==4) { nFramesParallel=5; } // 5 frames are typically much faster than 4
 
     int nThreads = nFramesParallel * 5;
 
