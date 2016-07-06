@@ -714,6 +714,10 @@ static av_cold int ff_libde265dec_ctx_init(AVCodecContext *avctx)
     de265_set_max_decode_frames_parallel(ctx->decoder, nFramesParallel);
     de265_start_worker_threads(ctx->decoder, nThreads);
 
+    // Set a max pictures latency in case we are switching input channels without decoder reset.
+    // TODO: this should be a decoder option.
+    de265_set_max_reorder_buffer_latency(ctx->decoder, 50);
+
     return 0;
 }
 
