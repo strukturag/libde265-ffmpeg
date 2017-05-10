@@ -44,11 +44,6 @@ extern "C" {
 #error "You need libde265 2.0 or newer to compile this plugin."
 #endif
 
-#if LIBDE265_NUMERIC_VERSION < 0x01000000
-// libde265 < 1.0 only supported 8 bits per pixel
-#define de265_get_bits_per_pixel(image, plane) 8
-#endif
-
 #include "libde265dec.h"
 
 #define MAX_FRAME_QUEUE     16
@@ -63,18 +58,15 @@ typedef struct DE265DecoderContext {
     int check_extra;
     int packetized;
     int length_size;
-#if LIBDE265_NUMERIC_VERSION >= 0x00070000
     int deblocking;
     int decode_ratio;
     int frame_queue_len;
     AVFrame *frame_queue[MAX_FRAME_QUEUE];
     int spec_queue_len;
     struct de265_image_spec *spec_queue[MAX_SPEC_QUEUE];
-#endif
 } DE265Context;
 
 
-#if LIBDE265_NUMERIC_VERSION >= 0x00070000
 static inline int align_value(int value, int alignment) {
     return ((value + (alignment - 1)) & ~(alignment - 1));
 }
@@ -354,7 +346,6 @@ static void ff_libde265dec_release_buffer(struct de265_image_intern* img, void* 
 
     dectx->frame_queue[dectx->frame_queue_len++] = frame;
 }
-#endif
 
 
 static int ff_libde265dec_decode(AVCodecContext *avctx,
@@ -422,9 +413,8 @@ static int ff_libde265dec_decode(AVCodecContext *avctx,
                     return AVERROR_INVALIDDATA;
                 }
             }
-#if LIBDE265_NUMERIC_VERSION >= 0x00070000
+
             de265_push_end_of_NAL(ctx->decoder);
-#endif
         }
     }
 
@@ -464,7 +454,7 @@ static int ff_libde265dec_decode(AVCodecContext *avctx,
         de265_push_end_of_stream(ctx->decoder);
     }
 
-#if LIBDE265_NUMERIC_VERSION >= 0x00070000
+
     // TODO: libde265 should support more fine-grained settings
     int deblocking = (avctx->skip_loop_filter < AVDISCARD_NONREF);
     if (deblocking != ctx->deblocking) {
@@ -485,7 +475,7 @@ static int ff_libde265dec_decode(AVCodecContext *avctx,
         ctx->decode_ratio = decode_ratio;
         de265_set_framerate_ratio(ctx->decoder, decode_ratio);
     }
-#endif
+
 
     // block until we get an image, or until we need more input data
 
@@ -524,7 +514,6 @@ static int ff_libde265dec_decode(AVCodecContext *avctx,
         }
 
 
-#if LIBDE265_NUMERIC_VERSION >= 0x00070000
         AVFrame *frame = (AVFrame *) de265_get_image_plane_user_data(img, 0);
         if (frame != NULL) {
             av_frame_ref(picture, frame);
@@ -542,7 +531,6 @@ static int ff_libde265dec_decode(AVCodecContext *avctx,
                 free_spec(ctx, spec);
             }
         } else {
-#endif
             picture->width = avctx->width;
             picture->height = avctx->height;
             picture->format = avctx->pix_fmt;
@@ -635,9 +623,7 @@ static int ff_libde265dec_decode(AVCodecContext *avctx,
                     }
                 }
             }
-#if LIBDE265_NUMERIC_VERSION >= 0x00070000
         }
-#endif
 
         *got_frame = 1;
 
@@ -654,7 +640,7 @@ static av_cold int ff_libde265dec_free(AVCodecContext *avctx)
 {
     DE265Context *ctx = (DE265Context *) avctx->priv_data;
     de265_free_decoder(ctx->decoder);
-#if LIBDE265_NUMERIC_VERSION >= 0x00070000
+
     while (ctx->frame_queue_len) {
         AVFrame *frame = ctx->frame_queue[--ctx->frame_queue_len];
         av_frame_free(&frame);
@@ -663,7 +649,7 @@ static av_cold int ff_libde265dec_free(AVCodecContext *avctx)
         struct de265_image_spec *spec = ctx->spec_queue[--ctx->spec_queue_len];
         free(spec);
     }
-#endif
+
     return 0;
 }
 
@@ -686,22 +672,19 @@ static av_cold int ff_libde265dec_ctx_init(AVCodecContext *avctx)
     DE265Context *ctx = (DE265Context *) avctx->priv_data;
     ctx->decoder = de265_new_decoder();
 
-#if LIBDE265_NUMERIC_VERSION >= 0x00070000
     struct de265_image_allocation allocation;
     allocation.get_buffer = ff_libde265dec_get_buffer;
     allocation.release_buffer = ff_libde265dec_release_buffer;
     allocation.allocation_userdata = avctx;
     de265_set_image_allocation_functions(ctx->decoder, &allocation);
-#endif
+
     ctx->check_extra = 1;
     ctx->packetized = 1;
     ctx->length_size = 4;
-#if LIBDE265_NUMERIC_VERSION >= 0x00070000
     ctx->deblocking = 1;
     ctx->decode_ratio = 100;
     ctx->frame_queue_len = 0;
     ctx->spec_queue_len = 0;
-#endif
 
     int nFramesParallel = av_cpu_count() / 2; // TODO: how should we set this optimally ?
     if (nFramesParallel<=1) { nFramesParallel=2; }
