@@ -40,8 +40,8 @@ extern "C" {
 
 #include <libde265/de265.h>
 
-#if !defined(LIBDE265_NUMERIC_VERSION) || LIBDE265_NUMERIC_VERSION < 0x00060000
-#error "You need libde265 0.6 or newer to compile this plugin."
+#if !defined(LIBDE265_NUMERIC_VERSION) || LIBDE265_NUMERIC_VERSION < 0x02000000
+#error "You need libde265 2.0 or newer to compile this plugin."
 #endif
 
 #if LIBDE265_NUMERIC_VERSION < 0x01000000
@@ -229,13 +229,12 @@ static int ff_libde265dec_get_buffer(struct de265_image_intern* img,
 
     enum de265_chroma chroma = spec->chroma;
     if (chroma != de265_chroma_mono) {
-        if (spec->luma_bytes_per_pixel != spec->chroma_bytes_per_pixel) {
+        if (spec->luma_bits_per_pixel != spec->chroma_bits_per_pixel) {
             goto fallback;
         }
     }
 
-    int bytes_per_pixel = spec->luma_bytes_per_pixel;
-    int bits_per_pixel = bytes_per_pixel * 8;
+    int bits_per_pixel = spec->luma_bits_per_pixel;
     enum AVPixelFormat format = get_pixel_format(avctx, chroma, bits_per_pixel);
     if (format == AV_PIX_FMT_NONE) {
         goto fallback;
@@ -462,7 +461,7 @@ static int ff_libde265dec_decode(AVCodecContext *avctx,
             }
         }
     } else {
-        de265_flush_data(ctx->decoder);
+        de265_push_end_of_stream(ctx->decoder);
     }
 
 #if LIBDE265_NUMERIC_VERSION >= 0x00070000
@@ -470,11 +469,18 @@ static int ff_libde265dec_decode(AVCodecContext *avctx,
     int deblocking = (avctx->skip_loop_filter < AVDISCARD_NONREF);
     if (deblocking != ctx->deblocking) {
         ctx->deblocking = deblocking;
-        de265_set_parameter_bool(ctx->decoder, DE265_DECODER_PARAM_DISABLE_DEBLOCKING, deblocking);
-        // TODO: how to notify to disable SAO?
-        de265_set_parameter_bool(ctx->decoder, DE265_DECODER_PARAM_DISABLE_SAO, deblocking);
+
+        if (deblocking) {
+          de265_allow_inexact_decoding(ctx->decoder,
+                                       de265_inexact_decoding_no_SAO        |
+                                       de265_inexact_decoding_no_deblocking);
+        }
+        else {
+          de265_allow_inexact_decoding(ctx->decoder, de265_inexact_decoding_mask_none);
+        }
     }
-    int decode_ratio = (avctx->skip_frame < AVDISCARD_NONREF) ? 100 : 0;
+
+    int decode_ratio = (avctx->skip_frame < AVDISCARD_NONREF) ? 100 : 25;
     if (decode_ratio != ctx->decode_ratio) {
         ctx->decode_ratio = decode_ratio;
         de265_set_framerate_ratio(ctx->decoder, decode_ratio);
@@ -684,7 +690,7 @@ static av_cold int ff_libde265dec_ctx_init(AVCodecContext *avctx)
     struct de265_image_allocation allocation;
     allocation.get_buffer = ff_libde265dec_get_buffer;
     allocation.release_buffer = ff_libde265dec_release_buffer;
-    allocation.userdata = avctx;
+    allocation.allocation_userdata = avctx;
     de265_set_image_allocation_functions(ctx->decoder, &allocation);
 #endif
     ctx->check_extra = 1;
