@@ -395,7 +395,7 @@ static int ff_libde265dec_decode(AVCodecContext *avctx,
                                 return AVERROR_INVALIDDATA;
                             }
                             err = de265_push_NAL(ctx->decoder, extradata + pos + 2, nal_size, 0, NULL);
-                            if (!de265_isOK(err)) {
+                            if (err) {
                                 av_log(avctx, AV_LOG_ERROR, "Failed to push data: %s (%d)\n", de265_get_error_text(err), err);
                                 return AVERROR_INVALIDDATA;
                             }
@@ -408,7 +408,7 @@ static int ff_libde265dec_decode(AVCodecContext *avctx,
                 ctx->packetized = 0;
                 av_log(avctx, AV_LOG_DEBUG, "Assuming non-packetized data\n");
                 err = de265_push_data(ctx->decoder, extradata, extradata_size, 0, NULL);
-                if (!de265_isOK(err)) {
+                if (err) {
                     av_log(avctx, AV_LOG_ERROR, "Failed to push extra data: %s (%d)\n", de265_get_error_text(err), err);
                     return AVERROR_INVALIDDATA;
                 }
