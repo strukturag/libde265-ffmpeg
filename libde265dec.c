@@ -348,6 +348,17 @@ static void ff_libde265dec_release_buffer(struct de265_image_intern* img, void* 
 }
 
 
+static void ff_libde265dec_enable_inexact_decoding(DE265Context *ctx) {
+    if (ctx->deblocking) {
+      de265_allow_inexact_decoding(ctx->decoder,
+                                   de265_inexact_decoding_no_SAO        |
+                                   de265_inexact_decoding_no_deblocking);
+    } else {
+      de265_allow_inexact_decoding(ctx->decoder, de265_inexact_decoding_mask_none);
+    }
+}
+
+
 static int ff_libde265dec_decode(AVCodecContext *avctx,
                                  void *data, int *got_frame, AVPacket *avpkt)
 {
@@ -459,15 +470,7 @@ static int ff_libde265dec_decode(AVCodecContext *avctx,
     int deblocking = (avctx->skip_loop_filter < AVDISCARD_NONREF);
     if (deblocking != ctx->deblocking) {
         ctx->deblocking = deblocking;
-
-        if (deblocking) {
-          de265_allow_inexact_decoding(ctx->decoder,
-                                       de265_inexact_decoding_no_SAO        |
-                                       de265_inexact_decoding_no_deblocking);
-        }
-        else {
-          de265_allow_inexact_decoding(ctx->decoder, de265_inexact_decoding_mask_none);
-        }
+        ff_libde265dec_enable_inexact_decoding(ctx);
     }
 
     int decode_ratio = (avctx->skip_frame < AVDISCARD_NONREF) ? 100 : 25;
@@ -706,6 +709,8 @@ static av_cold int ff_libde265dec_ctx_init(AVCodecContext *avctx)
     // Set a max pictures latency in case we are switching input channels without decoder reset.
     // TODO: this should be a decoder option.
     de265_set_max_reorder_buffer_latency(ctx->decoder, 50);
+
+    ff_libde265dec_enable_inexact_decoding(ctx);
 
     return 0;
 }
